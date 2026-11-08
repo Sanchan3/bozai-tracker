@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>週間 簿財トラッカー (Cloud Sync)</title>
+    <title>週間 簿財トラッカー (AI Prompt Copier)</title>
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="apple-touch-icon" href="https://via.placeholder.com/192/000000/FFFFFF/?text=Week">
     <style>
-        :root { --primary: #0f172a; --accent: #3b82f6; --danger: #ef4444; --bg: #f1f5f9; --card: #ffffff; --text: #334155; }
+        :root { --primary: #0f172a; --accent: #3b82f6; --danger: #ef4444; --bg: #f1f5f9; --card: #ffffff; --text: #334155; --success: #10b981; }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); padding: 16px; margin: 0; }
         
         .countdown-banner { background: var(--primary); color: white; padding: 16px; border-radius: 12px; text-align: center; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
@@ -26,7 +26,7 @@
         .tab .tab-date { font-size: 0.85rem; font-weight: bold; }
         .tab .tab-day { font-size: 0.75rem; margin-top: 2px; }
         
-        .task-container { background: var(--card); border-radius: 12px; padding: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); min-height: 350px; position: relative; }
+        .task-container { background: var(--card); border-radius: 12px; padding: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); min-height: 300px; position: relative; margin-bottom: 16px; }
         .current-date-display { font-size: 1.1rem; font-weight: bold; margin-bottom: 16px; color: var(--primary); border-bottom: 2px solid #f1f5f9; padding-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
         
         .task-input-group { display: flex; gap: 8px; margin-bottom: 16px; }
@@ -45,7 +45,13 @@
         .delete-btn { color: #cbd5e1; background: none; border: none; font-size: 1.5rem; cursor: pointer; padding: 0 8px; }
         .delete-btn:active { color: var(--danger); }
 
-        /* 同期中のオーバーレイ */
+        /* AIプロンプト生成セクション */
+        .ai-prompt-container { background: var(--card); border-radius: 12px; padding: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 16px; border: 2px dashed #93c5fd; }
+        .ai-prompt-header { font-weight: bold; color: var(--primary); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+        .ai-prompt-preview { width: 100%; height: 100px; padding: 8px; font-size: 0.85rem; border: 1px solid #cbd5e1; border-radius: 6px; background: #f8fafc; resize: none; box-sizing: border-box; font-family: monospace; margin-bottom: 8px; }
+        .ai-copy-btn { width: 100%; padding: 12px; background: var(--success); color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 1rem; }
+        .ai-copy-btn:active { background: #059669; }
+
         #syncOverlay { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.8); border-radius: 12px; align-items: center; justify-content: center; font-weight: bold; color: var(--primary); z-index: 10; }
         .sync-status { text-align: center; font-size: 0.85rem; color: #64748b; margin-top: 8px; }
     </style>
@@ -71,13 +77,22 @@
         </div>
         <ul class="task-list" id="taskList"></ul>
     </div>
+
+    <!-- AI KPT プロンプト生成エリア -->
+    <div class="ai-prompt-container">
+        <div class="ai-prompt-header">
+            <span>🤖 本日のKPT壁打ち用プロンプト</span>
+        </div>
+        <textarea id="aiPromptPreview" class="ai-prompt-preview" readonly></textarea>
+        <button class="ai-copy-btn" onclick="copyAIPrompt()">📋 このプロンプトをコピーしてAIに送る</button>
+    </div>
+
     <div class="sync-status" id="syncStatus">クラウド未同期</div>
 
     <script>
-        // ★★★ ここにステップ2で発行したURLを貼り付けます ★★★
-        const API_URL = 'https://script.google.com/macros/s/AKfycbzFq_fEovKtmlsEfzSxV_MrqxmH6lHzCOXnSOz-xcVzKoRr-UbYt5bpPGAGPmhbWxc/exec';
+        const API_URL = 'https://script.google.com/macros/s/AKfycbzFq_fEovKtmlsEfzSxV_MrqxmH6lHzCOXnSOz-xcVzKoRr-UbYt5bpPGAGPmhbWxc/exec'; // 既存のURLを設定してください
         
-        const TARGET_DATE = new Date('2027-07-31T23:59:59');
+        const TARGET_DATE = new Date('2027-08-05T23:59:59');
         const DAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
         
         let weekDates = [];
@@ -87,12 +102,10 @@
         function initApp() {
             calculateCountdown();
             generateWeekDates();
-            loadTasksFromCloud(); // 起動時にクラウドからデータを取得
+            loadTasksFromCloud();
         }
 
         // --- クラウド連携処理 ---
-
-        // データ取得 (GET)
         async function loadTasksFromCloud() {
             showSync(true);
             try {
@@ -103,7 +116,6 @@
             } catch (error) {
                 console.error("データの読み込みに失敗しました:", error);
                 document.getElementById('syncStatus').innerText = '同期エラー (オフライン)';
-                // エラー時はローカルのキャッシュがあれば使うなどの処理を入れることも可能
             } finally {
                 showSync(false);
                 renderTabs();
@@ -111,16 +123,13 @@
             }
         }
 
-        // データ保存 (POST)
         async function saveTasksToCloud() {
             showSync(true);
             try {
                 const response = await fetch(API_URL, {
                     method: 'POST',
                     body: JSON.stringify(tasks),
-                    headers: {
-                        'Content-Type': 'text/plain;charset=utf-8', // GASのCORS制約回避のためtext/plain
-                    }
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' }
                 });
                 await response.json();
                 document.getElementById('syncStatus').innerText = '保存完了: ' + new Date().toLocaleTimeString();
@@ -137,8 +146,7 @@
             document.getElementById('syncOverlay').style.display = isSyncing ? 'flex' : 'none';
         }
 
-        // --- UI/計算ロジック（基本はローカル版と同じ） ---
-
+        // --- ロジック ---
         function calculateCountdown() {
             const now = new Date();
             const diffTime = TARGET_DATE - now;
@@ -190,7 +198,6 @@
                     renderTabs();
                     renderTasks();
                 };
-                
                 tabsContainer.appendChild(tab);
             });
         }
@@ -223,6 +230,7 @@
                 list.appendChild(li);
             });
             updateProgress();
+            generateAIPromptText(); // タスク変更時にプロンプトも自動更新
         }
 
         async function addTask() {
@@ -233,7 +241,7 @@
                 tasks[selectedDateStr].push({ text, completed: false });
                 input.value = '';
                 renderTasks();
-                await saveTasksToCloud(); // クラウドへ保存
+                await saveTasksToCloud();
             }
         }
 
@@ -244,13 +252,13 @@
         async function toggleTask(index) {
             tasks[selectedDateStr][index].completed = !tasks[selectedDateStr][index].completed;
             renderTasks();
-            await saveTasksToCloud(); // クラウドへ保存
+            await saveTasksToCloud();
         }
 
         async function deleteTask(index) {
             tasks[selectedDateStr].splice(index, 1);
             renderTasks();
-            await saveTasksToCloud(); // クラウドへ保存
+            await saveTasksToCloud();
         }
 
         async function moveToNextDay(index) {
@@ -265,7 +273,7 @@
             tasks[selectedDateStr].splice(index, 1);
 
             renderTasks();
-            await saveTasksToCloud(); // クラウドへ保存
+            await saveTasksToCloud();
         }
 
         function updateProgress() {
@@ -284,6 +292,43 @@
             
             const percent = total === 0 ? 0 : (completed / total) * 100;
             document.getElementById('weeklyProgress').style.width = percent + '%';
+        }
+
+        // --- AIプロンプト自動生成ロジック ---
+        function generateAIPromptText() {
+            const dayTasks = tasks[selectedDateStr] || [];
+            const completedList = dayTasks.filter(t => t.completed).map(t => `- ${t.text}`).join('\n');
+            const uncompletedList = dayTasks.filter(t => !t.completed).map(t => `- ${t.text}`).join('\n');
+
+            const promptText = `私は2027年8月の税理士簿財試験に向けて勉強しています。
+本日は「${selectedDateStr}」の学習実績を振り返ります。
+
+【本日の完了タスク】
+${completedList || '（なし）'}
+
+【本日の未完了・持ち越しタスク】
+${uncompletedList || '（なし）'}
+
+上記の実績をもとに、本日の私の学習のKPT（Keep:良かったこと, Problem:課題, Try:次の試み）を一緒に分析し、明日以降の学習効率を高めるための具体的なアドバイスや改善案を提案してください。`;
+
+            document.getElementById('aiPromptPreview').value = promptText;
+        }
+
+        function copyAIPrompt() {
+            const textarea = document.getElementById('aiPromptPreview');
+            textarea.select();
+            navigator.clipboard.writeText(textarea.value).then(() => {
+                const btn = document.querySelector('.ai-copy-btn');
+                const originalText = btn.innerText;
+                btn.innerText = '✨ コピー完了！AIに貼り付けてください';
+                btn.style.background = '#3b82f6';
+                setTimeout(() => {
+                    btn.innerText = originalText;
+                    btn.style.background = 'var(--success)';
+                }, 2000);
+            }).catch(err => {
+                alert('コピーに失敗しました');
+            });
         }
 
         initApp();

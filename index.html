@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>週間 簿財トラッカー (Cloud Sync)</title>
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="https://via.placeholder.com/192/000000/FFFFFF/?text=Week">
+    <style>
+        :root { --primary: #0f172a; --accent: #3b82f6; --danger: #ef4444; --bg: #f1f5f9; --card: #ffffff; --text: #334155; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); padding: 16px; margin: 0; }
+        
+        .countdown-banner { background: var(--primary); color: white; padding: 16px; border-radius: 12px; text-align: center; margin-bottom: 20px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        .countdown-banner .target-date { font-size: 0.9rem; opacity: 0.8; margin-bottom: 8px; }
+        .countdown-banner .numbers { font-size: 1.2rem; font-weight: bold; }
+        .countdown-banner .highlight { font-size: 2rem; color: #60a5fa; margin: 0 4px; }
+        
+        .progress-container { background: #e2e8f0; border-radius: 8px; height: 10px; overflow: hidden; margin-top: 12px; }
+        .progress-bar { background: var(--accent); height: 100%; width: 0%; transition: width 0.3s ease; }
+        
+        .tabs { display: flex; justify-content: space-between; gap: 4px; padding-bottom: 10px; margin-bottom: 10px; }
+        .tab { flex: 1; padding: 10px 0; background: var(--card); border-radius: 8px; text-align: center; color: var(--text); cursor: pointer; border: 1px solid #cbd5e1; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .tab.active { background: var(--accent); color: white; border-color: var(--accent); }
+        .tab.today { border: 2px solid var(--accent); }
+        .tab .tab-date { font-size: 0.85rem; font-weight: bold; }
+        .tab .tab-day { font-size: 0.75rem; margin-top: 2px; }
+        
+        .task-container { background: var(--card); border-radius: 12px; padding: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); min-height: 350px; position: relative; }
+        .current-date-display { font-size: 1.1rem; font-weight: bold; margin-bottom: 16px; color: var(--primary); border-bottom: 2px solid #f1f5f9; padding-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+        
+        .task-input-group { display: flex; gap: 8px; margin-bottom: 16px; }
+        .task-input-group input[type="text"] { flex: 1; padding: 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 1rem; }
+        .task-input-group button { padding: 12px 16px; background: var(--primary); color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; }
+        
+        .task-list { list-style: none; padding: 0; margin: 0; }
+        .task-item { display: flex; align-items: center; padding: 12px 0; border-bottom: 1px solid #f1f5f9; }
+        .task-item:last-child { border-bottom: none; }
+        .task-item input[type="checkbox"] { width: 24px; height: 24px; margin-right: 12px; accent-color: var(--accent); }
+        .task-item span { flex: 1; font-size: 1.05rem; line-height: 1.4; }
+        
+        .btn-group { display: flex; gap: 4px; margin-left: 8px; }
+        .move-btn { color: var(--accent); background: #eff6ff; border: 1px solid #bfdbfe; font-size: 0.85rem; cursor: pointer; padding: 6px 8px; border-radius: 6px; font-weight: bold; white-space: nowrap; }
+        .move-btn:active { background: #dbeafe; }
+        .delete-btn { color: #cbd5e1; background: none; border: none; font-size: 1.5rem; cursor: pointer; padding: 0 8px; }
+        .delete-btn:active { color: var(--danger); }
+
+        /* 同期中のオーバーレイ */
+        #syncOverlay { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255,255,255,0.8); border-radius: 12px; align-items: center; justify-content: center; font-weight: bold; color: var(--primary); z-index: 10; }
+        .sync-status { text-align: center; font-size: 0.85rem; color: #64748b; margin-top: 8px; }
+    </style>
+</head>
+<body>
+    <div class="countdown-banner">
+        <div class="target-date">目標：2027年7月31日（本試験直前期）</div>
+        <div class="numbers">
+            残り<span class="highlight" id="remainWeeks">--</span>週
+            （<span class="highlight" id="remainDays">---</span>日）
+        </div>
+        <div class="progress-container"><div class="progress-bar" id="weeklyProgress"></div></div>
+    </div>
+
+    <div class="tabs" id="dayTabs"></div>
+
+    <div class="task-container">
+        <div id="syncOverlay">同期中...</div>
+        <div class="current-date-display" id="currentDateDisplay">--/-- (--) の指令</div>
+        <div class="task-input-group">
+            <input type="text" id="newTaskInput" placeholder="例: LEC 第34回 総合問題">
+            <button onclick="addTask()">追加</button>
+        </div>
+        <ul class="task-list" id="taskList"></ul>
+    </div>
+    <div class="sync-status" id="syncStatus">クラウド未同期</div>
+
+    <script>
+        // ★★★ ここにステップ2で発行したURLを貼り付けます ★★★
+        const API_URL = 'https://script.google.com/macros/s/AKfycbzFq_fEovKtmlsEfzSxV_MrqxmH6lHzCOXnSOz-xcVzKoRr-UbYt5bpPGAGPmhbWxc/exec';
+        
+        const TARGET_DATE = new Date('2027-07-31T23:59:59');
+        const DAY_NAMES = ['日', '月', '火', '水', '木', '金', '土'];
+        
+        let weekDates = [];
+        let selectedDateStr = '';
+        let tasks = {}; 
+
+        function initApp() {
+            calculateCountdown();
+            generateWeekDates();
+            loadTasksFromCloud(); // 起動時にクラウドからデータを取得
+        }
+
+        // --- クラウド連携処理 ---
+
+        // データ取得 (GET)
+        async function loadTasksFromCloud() {
+            showSync(true);
+            try {
+                const response = await fetch(API_URL);
+                const data = await response.json();
+                tasks = data || {};
+                document.getElementById('syncStatus').innerText = '同期完了: ' + new Date().toLocaleTimeString();
+            } catch (error) {
+                console.error("データの読み込みに失敗しました:", error);
+                document.getElementById('syncStatus').innerText = '同期エラー (オフライン)';
+                // エラー時はローカルのキャッシュがあれば使うなどの処理を入れることも可能
+            } finally {
+                showSync(false);
+                renderTabs();
+                renderTasks();
+            }
+        }
+
+        // データ保存 (POST)
+        async function saveTasksToCloud() {
+            showSync(true);
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    body: JSON.stringify(tasks),
+                    headers: {
+                        'Content-Type': 'text/plain;charset=utf-8', // GASのCORS制約回避のためtext/plain
+                    }
+                });
+                await response.json();
+                document.getElementById('syncStatus').innerText = '保存完了: ' + new Date().toLocaleTimeString();
+                updateProgress();
+            } catch (error) {
+                console.error("データの保存に失敗しました:", error);
+                document.getElementById('syncStatus').innerText = '保存エラー';
+            } finally {
+                showSync(false);
+            }
+        }
+
+        function showSync(isSyncing) {
+            document.getElementById('syncOverlay').style.display = isSyncing ? 'flex' : 'none';
+        }
+
+        // --- UI/計算ロジック（基本はローカル版と同じ） ---
+
+        function calculateCountdown() {
+            const now = new Date();
+            const diffTime = TARGET_DATE - now;
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            const diffWeeks = Math.floor(diffDays / 7);
+
+            document.getElementById('remainDays').innerText = diffDays > 0 ? diffDays : 0;
+            document.getElementById('remainWeeks').innerText = diffWeeks > 0 ? diffWeeks : 0;
+        }
+
+        function generateWeekDates() {
+            const today = new Date();
+            const dayOfWeek = today.getDay(); 
+            const diffToMonday = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
+            const monday = new Date(today.setDate(diffToMonday));
+
+            weekDates = [];
+            for (let i = 0; i < 7; i++) {
+                const d = new Date(monday);
+                d.setDate(monday.getDate() + i);
+                weekDates.push(d);
+            }
+            selectedDateStr = formatDateKey(new Date());
+        }
+
+        function formatDateKey(date) {
+            return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        }
+
+        function renderTabs() {
+            const tabsContainer = document.getElementById('dayTabs');
+            tabsContainer.innerHTML = '';
+            const realTodayStr = formatDateKey(new Date());
+
+            weekDates.forEach(date => {
+                const dateKey = formatDateKey(date);
+                const monthDay = `${date.getMonth() + 1}/${date.getDate()}`;
+                const dayName = DAY_NAMES[date.getDay()];
+                
+                const tab = document.createElement('div');
+                tab.className = 'tab';
+                if (dateKey === selectedDateStr) tab.classList.add('active');
+                if (dateKey === realTodayStr) tab.classList.add('today');
+                
+                tab.innerHTML = `<div class="tab-date">${monthDay}</div><div class="tab-day">(${dayName})</div>`;
+                
+                tab.onclick = () => {
+                    selectedDateStr = dateKey;
+                    renderTabs();
+                    renderTasks();
+                };
+                
+                tabsContainer.appendChild(tab);
+            });
+        }
+
+        function renderTasks() {
+            const [y, m, d] = selectedDateStr.split('-');
+            const dateObj = new Date(y, m - 1, d);
+            document.getElementById('currentDateDisplay').innerText = `${m}/${d} (${DAY_NAMES[dateObj.getDay()]}) の指令`;
+
+            const list = document.getElementById('taskList');
+            list.innerHTML = '';
+            
+            if (!tasks[selectedDateStr]) tasks[selectedDateStr] = [];
+
+            tasks[selectedDateStr].forEach((task, index) => {
+                const isCompleted = task.completed;
+                const li = document.createElement('li');
+                li.className = 'task-item';
+                
+                const moveBtnHtml = !isCompleted ? `<button class="move-btn" onclick="moveToNextDay(${index})">翌日へ→</button>` : '';
+
+                li.innerHTML = `
+                    <input type="checkbox" ${isCompleted ? 'checked' : ''} onchange="toggleTask(${index})">
+                    <span style="${isCompleted ? 'text-decoration: line-through; color: #94a3b8;' : ''}">${task.text}</span>
+                    <div class="btn-group">
+                        ${moveBtnHtml}
+                        <button class="delete-btn" onclick="deleteTask(${index})">×</button>
+                    </div>
+                `;
+                list.appendChild(li);
+            });
+            updateProgress();
+        }
+
+        async function addTask() {
+            const input = document.getElementById('newTaskInput');
+            const text = input.value.trim();
+            if (text) {
+                if (!tasks[selectedDateStr]) tasks[selectedDateStr] = [];
+                tasks[selectedDateStr].push({ text, completed: false });
+                input.value = '';
+                renderTasks();
+                await saveTasksToCloud(); // クラウドへ保存
+            }
+        }
+
+        document.getElementById('newTaskInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') addTask();
+        });
+
+        async function toggleTask(index) {
+            tasks[selectedDateStr][index].completed = !tasks[selectedDateStr][index].completed;
+            renderTasks();
+            await saveTasksToCloud(); // クラウドへ保存
+        }
+
+        async function deleteTask(index) {
+            tasks[selectedDateStr].splice(index, 1);
+            renderTasks();
+            await saveTasksToCloud(); // クラウドへ保存
+        }
+
+        async function moveToNextDay(index) {
+            const taskToMove = tasks[selectedDateStr][index];
+            const [y, m, d] = selectedDateStr.split('-');
+            const currentDate = new Date(y, m - 1, d);
+            currentDate.setDate(currentDate.getDate() + 1);
+            const nextDateStr = formatDateKey(currentDate);
+
+            if (!tasks[nextDateStr]) tasks[nextDateStr] = [];
+            tasks[nextDateStr].push({ text: taskToMove.text, completed: false });
+            tasks[selectedDateStr].splice(index, 1);
+
+            renderTasks();
+            await saveTasksToCloud(); // クラウドへ保存
+        }
+
+        function updateProgress() {
+            let total = 0;
+            let completed = 0;
+            
+            weekDates.forEach(date => {
+                const dateKey = formatDateKey(date);
+                if (tasks[dateKey]) {
+                    tasks[dateKey].forEach(task => {
+                        total++;
+                        if (task.completed) completed++;
+                    });
+                }
+            });
+            
+            const percent = total === 0 ? 0 : (completed / total) * 100;
+            document.getElementById('weeklyProgress').style.width = percent + '%';
+        }
+
+        initApp();
+    </script>
+</body>
+</html>
